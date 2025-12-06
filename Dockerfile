@@ -18,8 +18,8 @@ RUN wget https://github.com/RustScan/RustScan/releases/download/2.0.1/rustscan_2
     && dpkg -i rustscan_2.0.1_amd64.deb \
     && rm rustscan_2.0.1_amd64.deb
 
-# Install Python packages
-RUN pip3 install --no-cache-dir flask flask-socketio python-socketio eventlet
+# Install Python packages (break system packages restriction)
+RUN pip3 install --no-cache-dir --break-system-packages flask flask-socketio python-socketio eventlet
 
 # Create directories
 RUN mkdir -p /app/templates /output
