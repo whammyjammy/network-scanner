@@ -137,3 +137,24 @@ function addVulnerability(vuln) {
 function downloadReport() {
     window.location.href = `/api/scan/${currentScanId}/report`;
 }
+
+// Download JSON
+function downloadJSON() {
+    fetch(`/api/scan/${currentScanId}/json`)
+        .then(response => response.json())
+        .then(data => {
+            const jsonStr = JSON.stringify(data, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `scan_results_${currentScanId}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        })
+        .catch(error => {
+            alert('Failed to download JSON: ' + error.message);
+        });
+}
