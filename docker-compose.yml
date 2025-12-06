@@ -1,15 +1,15 @@
 version: '3.8'
 
 services:
-  vuln-scanner-web:
+  network-scanner-web:
     build: .
-    image: vuln-scanner-web:latest
-    container_name: vuln-scanner-web
+    image: network-scanner-web:latest
+    container_name: network-scanner-web
     network_mode: host
     volumes:
       - ./scans:/output
-    ports:
-      - "5000:5000"
+    # ports:
+    #   - "5000:5000"
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
