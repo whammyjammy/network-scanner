@@ -1,4 +1,3 @@
-
 * {
     margin: 0;
     padding: 0;
@@ -141,6 +140,7 @@ body {
 .status-scanning { background: #4CAF50; color: white; }
 .status-completed { background: #2196F3; color: white; }
 .status-failed { background: #f44336; color: white; }
+.status-cancelled { background: #9e9e9e; color: white; }
 
 .results-grid {
     display: grid;
@@ -214,6 +214,15 @@ body {
 
 .btn-download:hover {
     background: #45a049;
+}
+
+.btn-cancel {
+    background: #f44336;
+    margin-top: 10px;
+}
+
+.btn-cancel:hover {
+    background: #da190b;
 }
 
 @keyframes spin {

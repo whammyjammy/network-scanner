@@ -11,7 +11,7 @@ import re
 import uuid
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'vuln-scanner-secret-key-change-in-production'
+app.config['SECRET_KEY'] = 'network-scanner-secret-key-change-in-production'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 SCANS_DIR = Path("/output")
@@ -27,6 +27,8 @@ class ScanJob:
         self.target = target
         self.status = "queued"
         self.progress = 0
+        self.cancelled = False
+        self.current_process = None
         self.results = {
             "target": target,
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -36,6 +38,22 @@ class ScanJob:
         }
         self.output_dir = SCANS_DIR / scan_id
         self.output_dir.mkdir(exist_ok=True)
+    
+    def cancel(self):
+        """Cancel the scan"""
+        self.cancelled = True
+        self.status = "cancelled"
+        self.log("Scan cancelled by user", "warning")
+        
+        # Terminate current process if running
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+                self.current_process.wait(timeout=5)
+            except:
+                self.current_process.kill()
+        
+        self.update_progress(0, "cancelled")
     
     def log(self, message, level="info"):
         """Add log message and emit to client"""
@@ -62,6 +80,9 @@ class ScanJob:
     
     def run_rustscan(self):
         """Run RustScan for port discovery"""
+        if self.cancelled:
+            return
+            
         self.log("Starting RustScan - Fast Port Discovery", "info")
         self.update_progress(10, "scanning_ports")
         
@@ -75,14 +96,18 @@ class ScanJob:
                 "--", "-sV", "-sC", "-oN", str(output_file)
             ]
             
-            process = subprocess.Popen(
+            self.current_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True
             )
             
-            for line in process.stdout:
+            for line in self.current_process.stdout:
+                if self.cancelled:
+                    self.current_process.terminate()
+                    return
+                    
                 self.log(line.strip(), "debug")
                 if "Open" in line:
                     match = re.search(r'(\d+)', line)
@@ -96,26 +121,37 @@ class ScanJob:
                                 'port': port
                             })
             
-            process.wait()
-            self.update_progress(40, "ports_scanned")
-            self.log(f"RustScan completed. Found {len(self.results['ports'])} open ports", "success")
+            self.current_process.wait()
+            self.current_process = None
+            
+            if not self.cancelled:
+                self.update_progress(40, "ports_scanned")
+                self.log(f"RustScan completed. Found {len(self.results['ports'])} open ports", "success")
             
         except Exception as e:
-            self.log(f"RustScan error: {str(e)}", "error")
+            if not self.cancelled:
+                self.log(f"RustScan error: {str(e)}", "error")
     
     def run_nikto(self):
         """Run Nikto web vulnerability scanner"""
+        if self.cancelled:
+            return
+            
         web_ports = [p for p in self.results["ports"] if p in ["80", "443", "8080", "8443"]]
         
         if not web_ports:
             self.log("No web ports detected, skipping Nikto scan", "warning")
-            self.update_progress(80, "completed_no_web")
+            if not self.cancelled:
+                self.update_progress(80, "completed_no_web")
             return
         
         self.log(f"Starting Nikto scan on {len(web_ports)} web port(s)", "info")
         self.update_progress(50, "scanning_web")
         
         for i, port in enumerate(web_ports):
+            if self.cancelled:
+                return
+                
             protocol = "https" if port in ["443", "8443"] else "http"
             url = f"{protocol}://{self.target}:{port}"
             
@@ -130,14 +166,18 @@ class ScanJob:
                     "-Format", "txt"
                 ]
                 
-                process = subprocess.Popen(
+                self.current_process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     universal_newlines=True
                 )
                 
-                for line in process.stdout:
+                for line in self.current_process.stdout:
+                    if self.cancelled:
+                        self.current_process.terminate()
+                        return
+                        
                     self.log(line.strip(), "debug")
                     if "OSVDB" in line or "CVE" in line or "+" in line:
                         vuln = {
@@ -150,14 +190,19 @@ class ScanJob:
                             'vulnerability': vuln
                         })
                 
-                process.wait()
-                progress = 50 + int((i + 1) / len(web_ports) * 30)
-                self.update_progress(progress, "scanning_web")
+                self.current_process.wait()
+                self.current_process = None
+                
+                if not self.cancelled:
+                    progress = 50 + int((i + 1) / len(web_ports) * 30)
+                    self.update_progress(progress, "scanning_web")
                 
             except Exception as e:
-                self.log(f"Nikto scan error on port {port}: {str(e)}", "error")
+                if not self.cancelled:
+                    self.log(f"Nikto scan error on port {port}: {str(e)}", "error")
         
-        self.log(f"Nikto completed. Found {len(self.results['vulnerabilities'])} potential issues", "success")
+        if not self.cancelled:
+            self.log(f"Nikto completed. Found {len(self.results['vulnerabilities'])} potential issues", "success")
     
     def generate_report(self):
         """Generate final report"""
@@ -218,17 +263,24 @@ class ScanJob:
             self.log(f"Starting vulnerability scan for {self.target}", "info")
             self.update_progress(5, "initializing")
             
-            self.run_rustscan()
-            self.run_nikto()
-            self.generate_report()
+            if not self.cancelled:
+                self.run_rustscan()
             
-            self.log("Vulnerability assessment completed successfully!", "success")
-            self.status = "completed"
+            if not self.cancelled:
+                self.run_nikto()
+            
+            if not self.cancelled:
+                self.generate_report()
+                self.log("Vulnerability assessment completed successfully!", "success")
+                self.status = "completed"
+            else:
+                self.log("Scan was cancelled", "warning")
             
         except Exception as e:
-            self.log(f"Scan failed: {str(e)}", "error")
-            self.status = "failed"
-            self.update_progress(0, "failed")
+            if not self.cancelled:
+                self.log(f"Scan failed: {str(e)}", "error")
+                self.status = "failed"
+                self.update_progress(0, "failed")
 
 def scan_worker():
     """Background worker for processing scans"""
@@ -271,6 +323,25 @@ def start_scan():
         'scan_id': scan_id,
         'target': target,
         'status': 'queued'
+    })
+
+@app.route('/api/scan/<scan_id>/cancel', methods=['POST'])
+def cancel_scan(scan_id):
+    """Cancel an ongoing scan"""
+    if scan_id not in active_scans:
+        return jsonify({'error': 'Scan not found'}), 404
+    
+    scan = active_scans[scan_id]
+    
+    if scan.status in ['completed', 'failed', 'cancelled']:
+        return jsonify({'error': f'Cannot cancel scan with status: {scan.status}'}), 400
+    
+    scan.cancel()
+    
+    return jsonify({
+        'scan_id': scan_id,
+        'status': 'cancelled',
+        'message': 'Scan cancelled successfully'
     })
 
 @app.route('/api/scan/<scan_id>')
